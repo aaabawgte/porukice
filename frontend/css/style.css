@@ -945,7 +945,7 @@ input:focus {
   min-height: 34px;
   padding: 8px 12px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 13px;
   background:
     linear-gradient(135deg, rgba(255, 79, 195, 0.92), rgba(124, 92, 255, 0.9));
   color: #fff;
