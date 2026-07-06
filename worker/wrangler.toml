@@ -1,0 +1,14 @@
+name = "porukice-api"
+main = "worker.js"
+compatibility_date = "2026-07-06"
+
+# Za lokalni dev može ostati *.
+# Za produkciju kasnije stavi točan GitHub Pages URL u env var ALLOWED_ORIGIN.
+[vars]
+ALLOWED_ORIGIN = "*"
+JWT_SECRET = "promijeni-ovo-u-cloudflare-secret"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "porukice-db"
+database_id = "0b7f210c-c0cf-4d18-8f82-2f5b8313b21e"

@@ -1,0 +1,14 @@
+{
+  "name": "porukice-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute porukice-db --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute porukice-db --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
+}
