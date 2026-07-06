@@ -1,4 +1,4 @@
-const CACHE_NAME = 'porukice-v1';
+const CACHE_NAME = 'porukice-v2';
 
 const APP_SHELL = [
   './',
