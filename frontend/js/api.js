@@ -69,5 +69,16 @@ window.PorukiceApi = {
       method: 'POST',
       body: JSON.stringify({ reaction })
     });
+  },
+
+  getPushPublicKey() {
+    return this.request('/api/push/public-key');
+  },
+
+  subscribeToPush(subscription) {
+    return this.request('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ subscription })
+    });
   }
 };
