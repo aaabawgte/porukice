@@ -5,7 +5,7 @@ compatibility_date = "2026-07-06"
 # Za lokalni dev može ostati *.
 # Za produkciju kasnije stavi točan GitHub Pages URL u env var ALLOWED_ORIGIN.
 [vars]
-ALLOWED_ORIGIN = "*"
+ALLOWED_ORIGIN = "https://aaabawgte.github.io"
 JWT_SECRET = "promijeni-ovo-u-cloudflare-secret"
 
 [[d1_databases]]

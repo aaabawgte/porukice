@@ -48,7 +48,15 @@ export default {
       return json({ error: 'Ruta ne postoji' }, env, 404);
     } catch (error) {
       const status = error.status || 500;
-      return json({ error: error.message || 'Server greška' }, env, status);
+      const message = error.message || 'Server greška';
+
+      console.error('Porukice API error:', {
+        status,
+        message,
+        stack: error.stack || null
+      });
+
+      return json({ error: message }, env, status);
     }
   }
 };
@@ -257,6 +265,45 @@ async function sendMessage(request, env, user) {
   return json({ message }, env, 201);
 }
 
+async function reactToMessage(request, env, user, messageId) {
+  if (!messageId) {
+    throw httpError('Neispravna poruka', 400);
+  }
+
+  const body = await readJson(request);
+  const reaction = clean(body.reaction);
+
+  const message = await env.DB.prepare(
+    `SELECT id FROM messages WHERE id = ?`
+  ).bind(messageId).first();
+
+  if (!message) {
+    throw httpError('Poruka ne postoji', 404);
+  }
+
+  if (!reaction) {
+    await env.DB.prepare(
+      `DELETE FROM message_reactions
+       WHERE message_id = ? AND user_id = ?`
+    ).bind(messageId, user.id).run();
+
+    return json({ ok: true, reaction: null }, env);
+  }
+
+  if (!ALLOWED_REACTIONS.includes(reaction)) {
+    throw httpError('Ta reakcija nije dopuštena', 400);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO message_reactions (message_id, user_id, reaction)
+     VALUES (?, ?, ?)
+     ON CONFLICT(message_id, user_id)
+     DO UPDATE SET reaction = excluded.reaction, created_at = CURRENT_TIMESTAMP`
+  ).bind(messageId, user.id, reaction).run();
+
+  return json({ ok: true, reaction }, env);
+}
+
 async function requireAuth(request, env) {
   const header = request.headers.get('Authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -307,12 +354,15 @@ function json(data, env, status = 200) {
 }
 
 function corsResponse(body, status, env, extraHeaders = {}) {
+  const allowedOrigin = env.ALLOWED_ORIGIN || '*';
+
   return new Response(body, {
     status,
     headers: {
-      'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
+      'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Vary': 'Origin',
       ...extraHeaders
     }
   });
@@ -414,43 +464,4 @@ function arrayBufferToBase64(buffer) {
     binary += String.fromCharCode(byte);
   }
   return btoa(binary);
-}
-
-async function reactToMessage(request, env, user, messageId) {
-  if (!messageId) {
-    throw httpError('Neispravna poruka', 400);
-  }
-
-  const body = await readJson(request);
-  const reaction = clean(body.reaction);
-
-  const message = await env.DB.prepare(
-    `SELECT id FROM messages WHERE id = ?`
-  ).bind(messageId).first();
-
-  if (!message) {
-    throw httpError('Poruka ne postoji', 404);
-  }
-
-  if (!reaction) {
-    await env.DB.prepare(
-      `DELETE FROM message_reactions
-       WHERE message_id = ? AND user_id = ?`
-    ).bind(messageId, user.id).run();
-
-    return json({ ok: true, reaction: null }, env);
-  }
-
-  if (!ALLOWED_REACTIONS.includes(reaction)) {
-    throw httpError('Ta reakcija nije dopuštena', 400);
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO message_reactions (message_id, user_id, reaction)
-     VALUES (?, ?, ?)
-     ON CONFLICT(message_id, user_id)
-     DO UPDATE SET reaction = excluded.reaction, created_at = CURRENT_TIMESTAMP`
-  ).bind(messageId, user.id, reaction).run();
-
-  return json({ ok: true, reaction }, env);
 }

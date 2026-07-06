@@ -1,0 +1,19 @@
+{
+  "name": "Porukice",
+  "short_name": "Porukice",
+  "description": "Malo mjesto za vaše porukice.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fff1fb",
+  "theme_color": "#ff4fc3",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
