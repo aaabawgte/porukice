@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "wrangler": "latest"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
   }
 }

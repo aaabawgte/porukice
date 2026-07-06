@@ -2,11 +2,11 @@ name = "porukice-api"
 main = "worker.js"
 compatibility_date = "2026-07-06"
 
-# Za lokalni dev može ostati *.
-# Za produkciju kasnije stavi točan GitHub Pages URL u env var ALLOWED_ORIGIN.
 [vars]
 ALLOWED_ORIGIN = "https://aaabawgte.github.io"
 JWT_SECRET = "promijeni-ovo-u-cloudflare-secret"
+VAPID_PUBLIC_KEY = "BG_zjrCpUPYCw8rFNqZj5xwuLBx7FswntEH_KlY64NwY1psf9PVaY0smnRs5flRG5l2z_ek8pkGavlpHtDbNgUM"
+VAPID_SUBJECT = "mailto:bruno@example.com"
 
 [[d1_databases]]
 binding = "DB"

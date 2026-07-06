@@ -29,6 +29,15 @@ export default {
         return json({ user }, env);
       }
 
+      if (path === '/api/push/public-key' && request.method === 'GET') {
+        return json({ publicKey: env.VAPID_PUBLIC_KEY || '' }, env);
+      }
+
+      if (path === '/api/push/subscribe' && request.method === 'POST') {
+        const user = await requireAuth(request, env);
+        return subscribeToPush(request, env, user);
+      }
+
       if (path === '/api/messages' && request.method === 'GET') {
         const user = await requireAuth(request, env);
         return getMessages(env, user);
@@ -262,7 +271,200 @@ async function sendMessage(request, env, user) {
      WHERE messages.id = ?`
   ).bind(result.meta.last_row_id).first();
 
+  await notifyOtherUsers(env, user, message).catch((error) => {
+    console.error('Push notification failed:', error?.message || error);
+  });
+
   return json({ message }, env, 201);
+}
+
+async function subscribeToPush(request, env, user) {
+  const body = await readJson(request);
+  const subscription = body.subscription || body;
+
+  const endpoint = clean(subscription.endpoint);
+  const p256dh = clean(subscription.keys?.p256dh);
+  const auth = clean(subscription.keys?.auth);
+
+  if (!endpoint || !p256dh || !auth) {
+    throw httpError('Neispravna push pretplata', 400);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(endpoint)
+     DO UPDATE SET
+       user_id = excluded.user_id,
+       p256dh = excluded.p256dh,
+       auth = excluded.auth,
+       created_at = CURRENT_TIMESTAMP`
+  ).bind(user.id, endpoint, p256dh, auth).run();
+
+  return json({ ok: true }, env, 201);
+}
+
+async function notifyOtherUsers(env, sender, message) {
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) {
+    console.warn('Push skipped: missing VAPID env vars');
+    return;
+  }
+
+  const result = await env.DB.prepare(
+    `SELECT id, user_id, endpoint, p256dh, auth
+     FROM push_subscriptions
+     WHERE user_id != ?`
+  ).bind(sender.id).all();
+
+  const subscriptions = result.results || [];
+  if (!subscriptions.length) return;
+
+  const payload = JSON.stringify({
+    title: 'Porukice 💌',
+    body: `Nova porukica od ${sender.display_name || sender.username}`,
+    url: '/porukice/frontend/chat.html',
+    message_id: message.id
+  });
+
+  await Promise.allSettled(subscriptions.map(async (subscription) => {
+    const response = await sendWebPush(env, subscription, payload);
+
+    if (response.status === 404 || response.status === 410) {
+      await env.DB.prepare(
+        `DELETE FROM push_subscriptions WHERE id = ?`
+      ).bind(subscription.id).run();
+      return;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Push failed ${response.status}: ${text}`);
+    }
+  }));
+}
+
+async function sendWebPush(env, subscription, payload) {
+  const encrypted = await encryptPushPayload(subscription, payload);
+  const jwt = await createVapidJwt(env, subscription.endpoint);
+
+  return fetch(subscription.endpoint, {
+    method: 'POST',
+    headers: {
+      'TTL': '60',
+      'Content-Type': 'application/octet-stream',
+      'Content-Encoding': 'aes128gcm',
+      'Authorization': `vapid t=${jwt}, k=${env.VAPID_PUBLIC_KEY}`
+    },
+    body: encrypted
+  });
+}
+
+async function encryptPushPayload(subscription, payload) {
+  const receiverPublicKey = base64UrlToUint8Array(subscription.p256dh);
+  const authSecret = base64UrlToUint8Array(subscription.auth);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+
+  const receiverKey = await crypto.subtle.importKey(
+    'raw',
+    receiverPublicKey,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    []
+  );
+
+  const senderKeyPair = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits']
+  );
+
+  const senderPublicKey = new Uint8Array(await crypto.subtle.exportKey('raw', senderKeyPair.publicKey));
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: 'ECDH', public: receiverKey },
+    senderKeyPair.privateKey,
+    256
+  ));
+
+  const authInfo = concatUint8Arrays(
+    textToUint8Array('WebPush: info\0'),
+    receiverPublicKey,
+    senderPublicKey
+  );
+
+  const ikm = await hkdf(sharedSecret, authSecret, authInfo, 32);
+  const cek = await hkdf(ikm, salt, textToUint8Array('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(ikm, salt, textToUint8Array('Content-Encoding: nonce\0'), 12);
+
+  const plaintext = concatUint8Arrays(textToUint8Array(payload), new Uint8Array([2]));
+  const key = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce },
+    key,
+    plaintext
+  ));
+
+  const recordSize = new Uint8Array([0, 0, 16, 0]);
+  const keyIdLength = new Uint8Array([senderPublicKey.length]);
+
+  return concatUint8Arrays(salt, recordSize, keyIdLength, senderPublicKey, ciphertext);
+}
+
+async function createVapidJwt(env, endpoint) {
+  const audience = new URL(endpoint).origin;
+  const now = Math.floor(Date.now() / 1000);
+  const header = { typ: 'JWT', alg: 'ES256' };
+  const payload = {
+    aud: audience,
+    exp: now + 60 * 60 * 12,
+    sub: env.VAPID_SUBJECT
+  };
+
+  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(payload))}`;
+  const signature = await ecdsaSignVapid(unsigned, env.VAPID_PRIVATE_KEY, env.VAPID_PUBLIC_KEY);
+
+  return `${unsigned}.${signature}`;
+}
+
+async function ecdsaSignVapid(input, privateKey, publicKey) {
+  const publicBytes = base64UrlToUint8Array(publicKey);
+  const dBytes = base64UrlToUint8Array(privateKey);
+
+  const jwk = {
+    kty: 'EC',
+    crv: 'P-256',
+    x: uint8ArrayToBase64Url(publicBytes.slice(1, 33)),
+    y: uint8ArrayToBase64Url(publicBytes.slice(33, 65)),
+    d: uint8ArrayToBase64Url(dBytes),
+    ext: false,
+    key_ops: ['sign']
+  };
+
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign']
+  );
+
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key,
+    new TextEncoder().encode(input)
+  );
+
+  return base64UrlFromArrayBuffer(signature);
+}
+
+async function hkdf(ikm, salt, info, length) {
+  const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt, info },
+    key,
+    length * 8
+  );
+
+  return new Uint8Array(bits);
 }
 
 async function reactToMessage(request, env, user, messageId) {
@@ -433,6 +635,38 @@ async function hmacSha256(input, secret) {
   );
 
   return base64UrlFromArrayBuffer(signature);
+}
+
+function textToUint8Array(value) {
+  return new TextEncoder().encode(value);
+}
+
+function base64UrlToUint8Array(value) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function uint8ArrayToBase64Url(bytes) {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function concatUint8Arrays(...arrays) {
+  const length = arrays.reduce((total, array) => total + array.length, 0);
+  const result = new Uint8Array(length);
+  let offset = 0;
+
+  for (const array of arrays) {
+    result.set(array, offset);
+    offset += array.length;
+  }
+
+  return result;
 }
 
 function base64UrlEncode(value) {

@@ -50,3 +50,62 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(event.request).then((cached) => cached || caches.match('./index.html')))
   );
 });
+
+self.addEventListener('push', (event) => {
+  let data = {
+    title: 'Porukice 💌',
+    body: 'Stigla je nova porukica.',
+    url: '/porukice/frontend/chat.html'
+  };
+
+  if (event.data) {
+    try {
+      data = {
+        ...data,
+        ...event.data.json()
+      };
+    } catch (error) {
+      data.body = event.data.text() || data.body;
+    }
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Porukice 💌', {
+      body: data.body || 'Stigla je nova porukica.',
+      icon: '/porukice/icons/icon.svg',
+      badge: '/porukice/icons/icon.svg',
+      data: {
+        url: data.url || '/porukice/frontend/chat.html',
+        message_id: data.message_id || null
+      },
+      tag: 'porukice-message',
+      renotify: true
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const targetUrl = new URL(
+    event.notification.data?.url || '/porukice/frontend/chat.html',
+    self.location.origin
+  ).href;
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client && client.url.includes('/porukice/')) {
+          client.navigate(targetUrl);
+          return client.focus();
+        }
+      }
+
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+
+      return null;
+    })
+  );
+});

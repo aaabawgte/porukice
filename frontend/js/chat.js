@@ -8,6 +8,7 @@ let currentUser = null;
 let refreshTimer = null;
 let lastRenderedMessageSignature = '';
 let isSending = false;
+let notificationButton = null;
 
 const REACTIONS = ['❤️', '🥺', '😂', '💋', '😡'];
 
@@ -27,12 +28,104 @@ async function init() {
     const me = await window.PorukiceApi.me();
     currentUser = me.user;
     setStatus(`Prijavljen/a kao ${currentUser.display_name}`);
+    setupNotificationButton();
     await loadMessages();
     refreshTimer = setInterval(loadMessages, 2500);
   } catch (error) {
     window.PorukiceAuth.clearToken();
     window.location.href = '../index.html';
   }
+}
+
+function setupNotificationButton() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return;
+  }
+
+  if (Notification.permission === 'granted') {
+    ensurePushSubscription().catch(() => {});
+    return;
+  }
+
+  if (Notification.permission === 'denied') {
+    return;
+  }
+
+  notificationButton = document.createElement('button');
+  notificationButton.type = 'button';
+  notificationButton.className = 'notify-button';
+  notificationButton.textContent = 'Uključi obavijesti 💌';
+  notificationButton.addEventListener('click', enableNotifications);
+
+  statusEl.insertAdjacentElement('afterend', notificationButton);
+}
+
+async function enableNotifications() {
+  if (!notificationButton) return;
+
+  const previousText = notificationButton.textContent;
+  notificationButton.disabled = true;
+  notificationButton.textContent = 'Palim obavijesti...';
+
+  try {
+    const permission = await Notification.requestPermission();
+
+    if (permission !== 'granted') {
+      notificationButton.textContent = 'Obavijesti nisu dopuštene';
+      setStatus('Browser nije dopustio obavijesti. Bez dozvole nema zvonca, jebiga.');
+      return;
+    }
+
+    await ensurePushSubscription();
+    notificationButton.remove();
+    notificationButton = null;
+    setStatus(`Prijavljen/a kao ${currentUser.display_name} · obavijesti uključene`);
+  } catch (error) {
+    notificationButton.disabled = false;
+    notificationButton.textContent = previousText;
+    setStatus(error.message || 'Obavijesti nisu uključene. Nešto se pravi pametno.');
+  }
+}
+
+async function ensurePushSubscription() {
+  const registration = await navigator.serviceWorker.ready;
+  const existingSubscription = await registration.pushManager.getSubscription();
+
+  if (existingSubscription) {
+    await window.PorukiceApi.subscribeToPush(existingSubscription);
+    return existingSubscription;
+  }
+
+  const keyResult = await window.PorukiceApi.getPushPublicKey();
+  const publicKey = keyResult.publicKey;
+
+  if (!publicKey) {
+    throw new Error('Fali VAPID public key');
+  }
+
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey)
+  });
+
+  await window.PorukiceApi.subscribeToPush(subscription);
+  return subscription;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding)
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let i = 0; i < rawData.length; i += 1) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+
+  return outputArray;
 }
 
 async function onSubmit(event) {

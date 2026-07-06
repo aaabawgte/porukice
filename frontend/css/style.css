@@ -939,3 +939,21 @@ input:focus {
     scroll-behavior: auto !important;
   }
 }
+
+.notify-button {
+  margin-top: 8px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  background:
+    linear-gradient(135deg, rgba(255, 79, 195, 0.92), rgba(124, 92, 255, 0.9));
+  color: #fff;
+  box-shadow:
+    0 8px 22px rgba(255, 79, 195, 0.22),
+    0 0 18px rgba(72, 215, 255, 0.14);
+}
+
+.notify-button:hover {
+  transform: translateY(-1px) scale(1.02);
+}
