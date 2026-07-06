@@ -170,11 +170,18 @@ async function getMessages(env, user) {
        messages.id,
        messages.body,
        messages.created_at,
+       messages.reply_to_id,
        users.id AS sender_id,
        users.username AS sender_username,
-       users.display_name AS sender_display_name
+       users.display_name AS sender_display_name,
+       reply_messages.body AS reply_body,
+       reply_messages.sender_id AS reply_sender_id,
+       reply_users.username AS reply_sender_username,
+       reply_users.display_name AS reply_sender_display_name
      FROM messages
      JOIN users ON users.id = messages.sender_id
+     LEFT JOIN messages AS reply_messages ON reply_messages.id = messages.reply_to_id
+     LEFT JOIN users AS reply_users ON reply_users.id = reply_messages.sender_id
      ORDER BY messages.created_at ASC, messages.id ASC
      LIMIT 200`
   ).all();
@@ -245,6 +252,7 @@ async function getMessages(env, user) {
 async function sendMessage(request, env, user) {
   const body = await readJson(request);
   const messageBody = clean(body.body);
+  const replyToId = body.replyToId ? Number(body.replyToId) : null;
 
   if (!messageBody) {
     throw httpError('Poruka ne može biti prazna', 400);
@@ -254,20 +262,37 @@ async function sendMessage(request, env, user) {
     throw httpError('Poruka je preduga', 400);
   }
 
+  if (replyToId) {
+    const replyMessage = await env.DB.prepare(
+      `SELECT id FROM messages WHERE id = ?`
+    ).bind(replyToId).first();
+
+    if (!replyMessage) {
+      throw httpError('Poruka na koju odgovaraš ne postoji', 404);
+    }
+  }
+
   const result = await env.DB.prepare(
-    `INSERT INTO messages (sender_id, body) VALUES (?, ?)`
-  ).bind(user.id, messageBody).run();
+    `INSERT INTO messages (sender_id, body, reply_to_id) VALUES (?, ?, ?)`
+  ).bind(user.id, messageBody, replyToId).run();
 
   const message = await env.DB.prepare(
     `SELECT
        messages.id,
        messages.body,
        messages.created_at,
+       messages.reply_to_id,
        users.id AS sender_id,
        users.username AS sender_username,
-       users.display_name AS sender_display_name
+       users.display_name AS sender_display_name,
+       reply_messages.body AS reply_body,
+       reply_messages.sender_id AS reply_sender_id,
+       reply_users.username AS reply_sender_username,
+       reply_users.display_name AS reply_sender_display_name
      FROM messages
      JOIN users ON users.id = messages.sender_id
+     LEFT JOIN messages AS reply_messages ON reply_messages.id = messages.reply_to_id
+     LEFT JOIN users AS reply_users ON reply_users.id = reply_messages.sender_id
      WHERE messages.id = ?`
   ).bind(result.meta.last_row_id).first();
 

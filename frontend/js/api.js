@@ -57,10 +57,10 @@ window.PorukiceApi = {
     return this.request('/api/messages');
   },
 
-  sendMessage(body) {
+  sendMessage(body, replyToId = null) {
     return this.request('/api/messages', {
       method: 'POST',
-      body: JSON.stringify({ body })
+      body: JSON.stringify({ body, replyToId })
     });
   },
 

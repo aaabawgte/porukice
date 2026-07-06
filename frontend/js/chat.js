@@ -9,6 +9,7 @@ let refreshTimer = null;
 let lastRenderedMessageSignature = '';
 let isSending = false;
 let notificationButton = null;
+let replyTarget = null;
 
 const REACTIONS = ['❤️', '🥺', '😂', '💋', '😡'];
 
@@ -149,7 +150,8 @@ async function onSubmit(event) {
   input.value = '';
 
   try {
-    await window.PorukiceApi.sendMessage(body);
+    await window.PorukiceApi.sendMessage(body, replyTarget?.id || null);
+    clearReply();
     lastRenderedMessageSignature = '';
     await loadMessages({ forceScroll: true });
     setStatus(`Prijavljen/a kao ${currentUser.display_name}`);
@@ -204,7 +206,15 @@ function renderMessages(messages, options = {}) {
 
     const body = document.createElement('div');
     body.className = 'message-body';
-    body.textContent = message.body;
+
+    if (message.reply_to_id) {
+      body.appendChild(createReplyPreview(message));
+    }
+
+    const bodyText = document.createElement('div');
+    bodyText.className = 'message-body-text';
+    bodyText.textContent = message.body;
+    body.appendChild(bodyText);
 
     const reactions = createReactions(message);
 
@@ -213,12 +223,142 @@ function renderMessages(messages, options = {}) {
     time.textContent = getMessageMeta(message, isMine);
 
     bubble.append(name, body, reactions, time);
+    attachSwipeReply(bubble, message);
     messagesEl.appendChild(bubble);
   }
 
   if (options.shouldScroll) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+}
+
+function createReplyPreview(message) {
+  const preview = document.createElement('button');
+  preview.type = 'button';
+  preview.className = 'message-reply-preview';
+  preview.title = 'Poruka na koju se odgovara';
+
+  const author = document.createElement('div');
+  author.className = 'message-reply-author';
+  author.textContent = message.reply_sender_display_name || message.reply_sender_username || 'Poruka';
+
+  const text = document.createElement('div');
+  text.className = 'message-reply-text';
+  text.textContent = message.reply_body || 'Poruka nije dostupna';
+
+  preview.append(author, text);
+  preview.addEventListener('click', () => scrollToMessage(message.reply_to_id));
+
+  return preview;
+}
+
+function ensureReplyBar() {
+  let bar = document.querySelector('.reply-bar');
+
+  if (bar) {
+    return bar;
+  }
+
+  bar = document.createElement('div');
+  bar.className = 'reply-bar hidden';
+  bar.innerHTML = `
+    <div class="reply-bar-content">
+      <div class="reply-bar-label">Odgovaraš na</div>
+      <div class="reply-bar-text"></div>
+    </div>
+    <button class="reply-bar-close" type="button" aria-label="Makni reply">×</button>
+  `;
+
+  form.parentNode.insertBefore(bar, form);
+  bar.querySelector('.reply-bar-close').addEventListener('click', clearReply);
+
+  return bar;
+}
+
+function startReply(message) {
+  replyTarget = message;
+
+  const bar = ensureReplyBar();
+  const name = message.sender_display_name || message.sender_username || 'poruku';
+  const text = message.body || '';
+
+  bar.classList.remove('hidden');
+  bar.querySelector('.reply-bar-label').textContent = `Odgovaraš na ${name}`;
+  bar.querySelector('.reply-bar-text').textContent = text.length > 90 ? `${text.slice(0, 90)}...` : text;
+
+  input.focus();
+}
+
+function clearReply() {
+  replyTarget = null;
+
+  const bar = document.querySelector('.reply-bar');
+  if (bar) {
+    bar.classList.add('hidden');
+  }
+}
+
+function attachSwipeReply(element, message) {
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let swiping = false;
+
+  element.dataset.messageId = String(message.id);
+
+  element.addEventListener('touchstart', (event) => {
+    startX = event.touches[0].clientX;
+    startY = event.touches[0].clientY;
+    currentX = startX;
+    swiping = true;
+  }, { passive: true });
+
+  element.addEventListener('touchmove', (event) => {
+    if (!swiping) return;
+
+    currentX = event.touches[0].clientX;
+    const diffX = currentX - startX;
+    const diffY = event.touches[0].clientY - startY;
+
+    if (Math.abs(diffY) > 28 || diffX <= 0) {
+      element.style.transform = '';
+      element.classList.remove('swiping-reply');
+      return;
+    }
+
+    if (diffX < 96) {
+      element.style.transform = `translateX(${diffX}px)`;
+      element.classList.add('swiping-reply');
+    }
+  }, { passive: true });
+
+  element.addEventListener('touchend', () => {
+    if (!swiping) return;
+
+    const diffX = currentX - startX;
+    element.style.transform = '';
+    element.classList.remove('swiping-reply');
+
+    if (diffX > 56) {
+      startReply(message);
+    }
+
+    swiping = false;
+  });
+
+  element.addEventListener('dblclick', () => startReply(message));
+}
+
+function scrollToMessage(messageId) {
+  const target = messagesEl.querySelector(`[data-message-id="${messageId}"]`);
+
+  if (!target) {
+    return;
+  }
+
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.add('message-highlight');
+  window.setTimeout(() => target.classList.remove('message-highlight'), 1200);
 }
 
 function isNearBottom() {
@@ -279,7 +419,7 @@ function getMessageSignature(messages) {
       .sort()
       .join('|');
 
-    return `${message.id}:${message.is_read ? 1 : 0}:${message.read_at || ''}:${reactions}`;
+    return `${message.id}:${message.is_read ? 1 : 0}:${message.read_at || ''}:${message.reply_to_id || ''}:${message.reply_body || ''}:${reactions}`;
   }).join(',');
 }
 
